@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Common Robot Arm Configurations - AI Replica</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: Arial, sans-serif; display: flex; height: 100vh; overflow: hidden; background-color: #f4f4f9; }
+        #sidebar { width: 340px; background: #ffffff; border-right: 1px solid #ccc; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+        #canvas-container { flex: 1; position: relative; }
+        h2 { font-size: 1.1rem; color: #333; margin-bottom: 5px; border-bottom: 2px solid #007bff; padding-bottom: 4px; }
+        .control-group { display: flex; flex-direction: column; gap: 8px; }
+        label { font-size: 0.85rem; font-weight: bold; color: #555; display: flex; justify-content: space-between; }
+        select, input[type="range"] { width: 100%; padding: 4px; }
+        .checkbox-group { display: flex; flex-direction: column; gap: 6px; }
+        .checkbox-label { font-weight: normal; font-size: 0.85rem; display: flex; align-items: center; gap: 8px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 5px; font-size: 0.8rem; text-align: center; }
+        th, td { border: 1px solid #ddd; padding: 4px; }
+        th { background-color: #007bff; color: white; }
+        .info-box { font-size: 0.75rem; color: #666; line-height: 1.2; background: #eef2f5; padding: 8px; border-radius: 4px; }
+    </style>
+    <!-- Three.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h2>Robot Configuration</h2>
+        <div class="control-group">
+            <label for="preset-select">Arm Type Preset:</label>
+            <select id="preset-select">
+                <option value="elbow">Elbow Robot Arm (RRR)</option>
+                <option value="planar">Planar Elbow Robot Arm (RRR 2D)</option>
+                <option value="scara">SCARA Arm (RRP)</option>
+                <option value="cylindrical">Cylindrical Robot Arm (RPP)</option>
+                <option value="cnc">CNC / Cartesian Robot Arm (PPP)</option>
+            </select>
+        </div>
+
+        <h2>Joint Kinematics Control</h2>
+        <div class="control-group">
+            <label>Joint 1 Variable (<span id="lbl-j1-type">θ1</span>): <span id="val-j1">0</span></label>
+            <input type="range" id="slider-j1" min="-3.14" max="3.14" step="0.01" value="0">
+
+            <label>Joint 2 Variable (<span id="lbl-j2-type">θ2</span>): <span id="val-j2">0</span></label>
+            <input type="range" id="slider-j2" min="-3.14" max="3.14" step="0.01" value="0">
+
+            <label>Joint 3 Variable (<span id="lbl-j3-type">θ3</span>): <span id="val-j3">0</span></label>
+            <input type="range" id="slider-j3" min="-3.14" max="3.14" step="0.01" value="0">
+
+            <label>End-Effector Gripper: <span id="val-grip">0.5</span></label>
+            <input type="range" id="slider-grip" min="0.1" max="1.0" step="0.05" value="0.5">
+        </div>
+
+        <h2>Display Options</h2>
+        <div class="checkbox-group">
+            <label class="checkbox-label"><input type="checkbox" id="chk-show-robot" checked> Show Robot Mesh</label>
+            <label class="checkbox-label"><input type="checkbox" id="chk-show-frames" checked> Show Coordinate Frames</label>
+            <label class="checkbox-label"><input type="checkbox" id="chk-show-table" checked> Show DH Parameter Table</label>
+        </div>
+
+        <div id="dh-table-container">
+            <h2>DH Parameters Table</h2>
+            <table>
+                <thead>
+                    <tr><th>i</th><th>θi</th><th>di</th><th>ri</th><th>αi</th></tr>
+                </thead>
+                <tbody id="dh-table-body">
+                    <!-- Updated via JS -->
+                </tbody>
+            </table>
+        </div>
+
+        <div class="info-box">
+            <b>Note:</b> Standard Denavit-Hartenberg (DH) homogeneous transformation formula:
+            <br><i>A<sub>i</sub> = Rot<sub>z</sub>(θ<sub>i</sub>) · Trans<sub>z</sub>(d<sub>i</sub>) · Trans<sub>x</sub>(r<sub>i</sub>) · Rot<sub>x</sub>(α<sub>i</sub>)</i>
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        // --- Preset Kinematic Data Definitions ---
+        const PRESETS = {
+            elbow: {
+                types: ['R', 'R', 'R'],
+                dh: [
+                    { theta: 0, d: 2, r: 0, alpha: Math.PI / 2 },
+                    { theta: 0, d: 0, r: 2.5, alpha: 0 },
+                    { theta: 0, d: 0, r: 2, alpha: 0 }
+                ],
+                ranges: [
+                    { min: -Math.PI, max: Math.PI },
+                    { min: -Math.PI / 2, max: Math.PI / 2 },
+                    { min: -Math.PI / 2, max: Math.PI / 2 }
+                ]
+            },
+            planar: {
+                types: ['R', 'R', 'R'],
+                dh: [
+                    { theta: 0, d: 0.5, r: 2.5, alpha: 0 },
+                    { theta: 0, d: 0, r: 2, alpha: 0 },
+                    { theta: 0, d: 0, r: 1.5, alpha: 0 }
+                ],
+                ranges: [
+                    { min: -Math.PI, max: Math.PI },
+                    { min: -Math.PI, max: Math.PI },
+                    { min: -Math.PI, max: Math.PI }
+                ]
+            },
+            scara: {
+                types: ['R', 'R', 'P'],
+                dh: [
+                    { theta: 0, d: 2, r: 2, alpha: 0 },
+                    { theta: 0, d: 0, r: 1.5, alpha: Math.PI },
+                    { theta: 0, d: 0, r: 0, alpha: 0 } // d3 is variable
+                ],
+                ranges: [
+                    { min: -Math.PI, max: Math.PI },
+                    { min: -Math.PI, max: Math.PI },
+                    { min: 0.1, max: 2.0 }
+                ]
+            },
+            cylindrical: {
+                types: ['R', 'P', 'P'],
+                dh: [
+                    { theta: 0, d: 1.5, r: 0, alpha: 0 },
+                    { theta: 0, d: 0, r: 0, alpha: -Math.PI / 2 }, // d2 variable
+                    { theta: 0, d: 0, r: 0, alpha: 0 }             // d3 variable
+                ],
+                ranges: [
+                    { min: -Math.PI, max: Math.PI },
+                    { min: 0.5, max: 2.5 },
+                    { min: 0.5, max: 2.5 }
+                ]
+            },
+            cnc: {
+                types: ['P', 'P', 'P'],
+                dh: [
+                    { theta: 0, d: 0, r: 0, alpha: -Math.PI / 2 }, // d1 variable
+                    { theta: -Math.PI / 2, d: 0, r: 0, alpha: -Math.PI / 2 }, // d2 variable
+                    { theta: 0, d: 0, r: 0, alpha: 0 }             // d3 variable
+                ],
+                ranges: [
+                    { min: 0.1, max: 3.0 },
+                    { min: 0.1, max: 3.0 },
+                    { min: 0.1, max: 3.0 }
+                ]
+            }
+        };
+
+        let currentPresetKey = 'elbow';
+        let currentValues = [0, 0, 0];
+        let gripWidth = 0.5;
+
+        // --- Three.js Setup ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xf0f0f0);
+
+        const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 100);
+        camera.position.set(8, 8, 10);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.target.set(0, 1.5, 0);
+        controls.update();
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(10, 20, 10);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        // Ground Grid
+        const gridHelper = new THREE.GridHelper(15, 15, 0x444444, 0x888888);
+        scene.add(gridHelper);
+
+        // Robot Visualization Container Groups
+        const robotGroup = new THREE.Group();
+        const framesGroup = new THREE.Group();
+        scene.add(robotGroup);
+        scene.add(framesGroup);
+
+        // --- DH Matrix Computation ---
+        function getDHMatrix(theta, d, r, alpha) {
+            const ct = Math.cos(theta), st = Math.sin(theta);
+            const ca = Math.cos(alpha), sa = Math.sin(alpha);
+
+            const m = new THREE.Matrix4();
+            m.set(
+                ct, -st * ca,  st * sa, r * ct,
+                st,  ct * ca, -ct * sa, r * st,
+                 0,       sa,       ca,      d,
+                 0,        0,        0,      1
+            );
+            return m;
+        }
+
+        // --- Build Axes Helper Frame ---
+        function createAxisFrame() {
+            const frame = new THREE.Group();
+            const len = 0.8;
+            
+            // X-Axis (Red), Y-Axis (Green), Z-Axis (Blue)
+            const xMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            const yMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+            const zMat = new THREE.MeshBasicMaterial({ color: 0x0000ff });
+
+            const geom = new THREE.CylinderGeometry(0.02, 0.02, len);
+            
+            const xAxis = new THREE.Mesh(geom, xMat);
+            xAxis.rotation.z = -Math.PI / 2;
+            xAxis.position.x = len / 2;
+
+            const yAxis = new THREE.Mesh(geom, yMat);
+            yAxis.position.y = len / 2;
+
+            const zAxis = new THREE.Mesh(geom, zMat);
+            zAxis.rotation.x = Math.PI / 2;
+            zAxis.position.z = len / 2;
+
+            frame.add(xAxis, yAxis, zAxis);
+            return frame;
+        }
+
+        // --- Update Arm Kinematics & Rendering ---
+        function updateRobot() {
+            // Clear existing geometry
+            while(robotGroup.children.length > 0) robotGroup.remove(robotGroup.children[0]);
+            while(framesGroup.children.length > 0) framesGroup.remove(framesGroup.children[0]);
+
+            const config = PRESETS[currentPresetKey];
+            let T = new THREE.Matrix4(); // Base Identity Matrix
+
+            // Render Base
+            const baseGeom = new THREE.CylinderGeometry(0.6, 0.8, 0.4, 32);
+            const baseMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
+            const baseMesh = new THREE.Mesh(baseGeom, baseMat);
+            baseMesh.position.y = 0.2;
+            if (document.getElementById('chk-show-robot').checked) {
+                robotGroup.add(baseMesh);
+            }
+
+            // Base Frame
+            if (document.getElementById('chk-show-frames').checked) {
+                const baseFrame = createAxisFrame();
+                framesGroup.add(baseFrame);
+            }
+
+            const jointColors = [0x007bff, 0x28a745, 0xdc3545];
+            const dhTableRows = [];
+
+            for (let i = 0; i < 3; i++) {
+                const type = config.types[i];
+                let theta = config.dh[i].theta;
+                let d = config.dh[i].d;
+                let r = config.dh[i].r;
+                let alpha = config.dh[i].alpha;
+
+                // Assign variable from controls
+                if (type === 'R') {
+                    theta += currentValues[i];
+                } else {
+                    d += currentValues[i];
+                }
+
+                dhTableRows.push({ i: i + 1, theta: theta.toFixed(2), d: d.toFixed(2), r: r.toFixed(2), alpha: alpha.toFixed(2) });
+
+                const A = getDHMatrix(theta, d, r, alpha);
+                const T_prev = T.clone();
+                T.multiply(A);
+
+                // World positions of previous frame and current frame
+                const posPrev = new THREE.Vector3().setFromMatrixPosition(T_prev);
+                const posCurr = new THREE.Vector3().setFromMatrixPosition(T);
+
+                // Render Link geometry connecting joints
+                if (document.getElementById('chk-show-robot').checked) {
+                    const distance = posPrev.distanceTo(posCurr);
+                    if (distance > 0.05) {
+                        const linkGeom = new THREE.CylinderGeometry(0.15, 0.15, distance, 16);
+                        const linkMat = new THREE.MeshStandardMaterial({ color: jointColors[i] });
+                        const linkMesh = new THREE.Mesh(linkGeom, linkMat);
+
+                        // Align cylinder along vector between posPrev and posCurr
+                        const midPoint = new THREE.Vector3().addVectors(posPrev, posCurr).multiplyScalar(0.5);
+                        linkMesh.position.copy(midPoint);
+                        linkMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), posCurr.clone().sub(posPrev).normalize());
+                        robotGroup.add(linkMesh);
+                    }
+
+                    // Render Joint Hub (Sphere)
+                    const jointGeom = new THREE.SphereGeometry(0.25, 16, 16);
+                    const jointMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+                    const jointMesh = new THREE.Mesh(jointGeom, jointMat);
+                    jointMesh.position.copy(posCurr);
+                    robotGroup.add(jointMesh);
+                }
+
+                // Render Frame
+                if (document.getElementById('chk-show-frames').checked) {
+                    const frame = createAxisFrame();
+                    frame.applyMatrix4(T);
+                    framesGroup.add(frame);
+                }
+            }
+
+            // Render Gripper End-Effector at Link 3 End
+            if (document.getElementById('chk-show-robot').checked) {
+                const gripGroup = new THREE.Group();
+                const gripMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+                const fingerGeom = new THREE.BoxGeometry(0.08, 0.3, 0.08);
+
+                const leftFinger = new THREE.Mesh(fingerGeom, gripMat);
+                leftFinger.position.set(-gripWidth / 4, 0.15, 0);
+
+                const rightFinger = new THREE.Mesh(fingerGeom, gripMat);
+                rightFinger.position.set(gripWidth / 4, 0.15, 0);
+
+                gripGroup.add(leftFinger, rightFinger);
+                gripGroup.applyMatrix4(T);
+                robotGroup.add(gripGroup);
+            }
+
+            // Render DH Table UI
+            updateDHTableUI(dhTableRows);
+        }
+
+        function updateDHTableUI(rows) {
+            const tbody = document.getElementById('dh-table-body');
+            tbody.innerHTML = '';
+            rows.forEach(r => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>${r.i}</td><td>${r.theta}</td><td>${r.d}</td><td>${r.r}</td><td>${r.alpha}</td>`;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // --- UI Events & Updates ---
+        function configureControls() {
+            const config = PRESETS[currentPresetKey];
+            for (let i = 0; i < 3; i++) {
+                const type = config.types[i];
+                const slider = document.getElementById(`slider-j${i+1}`);
+                const lblType = document.getElementById(`lbl-j${i+1}-type`);
+                const range = config.ranges[i];
+
+                slider.min = range.min;
+                slider.max = range.max;
+                slider.value = (range.min + range.max) / 2;
+                currentValues[i] = parseFloat(slider.value);
+
+                lblType.innerText = type === 'R' ? `θ${i+1} (Rot)` : `d${i+1} (Pris)`;
+                document.getElementById(`val-j${i+1}`).innerText = currentValues[i].toFixed(2);
+            }
+            updateRobot();
+        }
+
+        // Event Listeners
+        document.getElementById('preset-select').addEventListener('change', (e) => {
+            currentPresetKey = e.target.value;
+            configureControls();
+        });
+
+        [1, 2, 3].forEach(i => {
+            document.getElementById(`slider-j${i}`).addEventListener('input', (e) => {
+                currentValues[i-1] = parseFloat(e.target.value);
+                document.getElementById(`val-j${i}`).innerText = currentValues[i-1].toFixed(2);
+                updateRobot();
+            });
+        });
+
+        document.getElementById('slider-grip').addEventListener('input', (e) => {
+            gripWidth = parseFloat(e.target.value);
+            document.getElementById('val-grip').innerText = gripWidth.toFixed(2);
+            updateRobot();
+        });
+
+        document.getElementById('chk-show-robot').addEventListener('change', updateRobot);
+        document.getElementById('chk-show-frames').addEventListener('change', updateRobot);
+        document.getElementById('chk-show-table').addEventListener('change', (e) => {
+            document.getElementById('dh-table-container').style.display = e.target.checked ? 'block' : 'none';
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        });
+
+        // Initialize App
+        configureControls();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+</html>
